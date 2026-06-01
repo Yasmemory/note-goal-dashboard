@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "note follower roadmap",
-  description: "noteフォロワー目標達成までの行動ロードマップ",
+  description: "noteフォロワー目標達成までの実績管理ダッシュボード",
 };
 
 export default function RootLayout({
