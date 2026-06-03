@@ -1,6 +1,15 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 type FormValues = {
   accountStartDate: string;
@@ -37,6 +46,13 @@ type RoadmapItem = {
   followerIncrease: number;
   articleGoal: number;
   shortPostGoal: number;
+};
+
+type GrowthModelPoint = {
+  progress: string;
+  linear: number;
+  sns: number;
+  exponential: number;
 };
 
 const INPUT_STORAGE_KEY = "note-follower-roadmap-inputs";
@@ -119,6 +135,21 @@ function buildRoadmap(
   });
 }
 
+function buildGrowthModelData(values: FormValues): GrowthModelPoint[] {
+  const gap = values.targetFollowers - values.currentFollowers;
+
+  return Array.from({ length: 7 }, (_, index) => {
+    const progress = index / 6;
+
+    return {
+      progress: `${Math.round(progress * 100)}%`,
+      linear: Math.round(values.currentFollowers + gap * progress),
+      sns: Math.round(values.currentFollowers + gap * progress ** 1.6),
+      exponential: Math.round(values.currentFollowers + gap * progress ** 2.4),
+    };
+  });
+}
+
 function MetricCard({
   label,
   value,
@@ -180,6 +211,77 @@ function Roadmap({ title, description, items }: { title: string; description: st
             ))}
           </tbody>
         </table>
+      </div>
+    </section>
+  );
+}
+
+function GrowthModelChart({ data }: { data: GrowthModelPoint[] }) {
+  return (
+    <section className="rounded-3xl border border-stone-200 bg-white p-5 shadow-sm sm:p-6">
+      <p className="text-xs font-bold tracking-[0.18em] text-emerald-600">GROWTH MODELS</p>
+      <h2 className="mt-1 text-xl font-black text-stone-800">成長モデル比較グラフ</h2>
+      <p className="mt-1 text-sm text-stone-500">
+        現在値から目標値までの進み方を、3つの仮説で比較します。
+      </p>
+      <div className="mt-5 overflow-x-auto">
+        <LineChart
+          data={data}
+          height={320}
+          margin={{ bottom: 8, left: -8, right: 24, top: 8 }}
+          width={720}
+        >
+          <CartesianGrid stroke="#e7e5e4" strokeDasharray="4 4" />
+          <XAxis dataKey="progress" stroke="#78716c" tick={{ fontSize: 12 }} tickLine={false} />
+          <YAxis stroke="#78716c" tick={{ fontSize: 12 }} tickLine={false} width={58} />
+          <Tooltip
+            formatter={(value, name) => {
+              const labels: Record<string, string> = {
+                linear: "線形成長",
+                sns: "SNS型成長",
+                exponential: "指数型成長",
+              };
+              return [`${value}人`, labels[String(name)] ?? String(name)];
+            }}
+            labelFormatter={(label) => `進捗 ${label}`}
+          />
+          <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
+          <Line
+            dataKey="linear"
+            dot={{ r: 3 }}
+            name="線形成長"
+            stroke="#059669"
+            strokeWidth={3}
+            type="monotone"
+          />
+          <Line
+            dataKey="sns"
+            dot={{ r: 3 }}
+            name="SNS型成長"
+            stroke="#2563eb"
+            strokeWidth={3}
+            type="monotone"
+          />
+          <Line
+            dataKey="exponential"
+            dot={{ r: 3 }}
+            name="指数型成長"
+            stroke="#e11d48"
+            strokeWidth={3}
+            type="monotone"
+          />
+        </LineChart>
+      </div>
+      <div className="mt-4 grid gap-3 text-xs leading-relaxed text-stone-600 sm:grid-cols-3">
+        <p className="rounded-2xl bg-emerald-50 p-3">
+          <span className="font-black text-emerald-700">線形成長:</span> 毎期間ほぼ同じペースで増える想定です。
+        </p>
+        <p className="rounded-2xl bg-blue-50 p-3">
+          <span className="font-black text-blue-700">SNS型成長:</span> 序盤はゆっくり、後半に反応が伸びる想定です。
+        </p>
+        <p className="rounded-2xl bg-rose-50 p-3">
+          <span className="font-black text-rose-700">指数型成長:</span> 序盤はかなり遅く、終盤に強く伸びる想定です。
+        </p>
       </div>
     </section>
   );
@@ -276,6 +378,7 @@ export default function Home() {
     () => (metrics.isValid ? buildRoadmap(values, metrics.remainingDays, metrics.followerGap, 30) : []),
     [metrics, values],
   );
+  const growthModelData = useMemo(() => buildGrowthModelData(values), [values]);
 
   const isBehind = metrics.progressDelta < 0;
   const adjustedReads = values.readsPerDay + (isBehind ? Math.max(2, Math.ceil(Math.abs(metrics.progressDelta) / 10)) : 0);
@@ -479,6 +582,7 @@ export default function Home() {
           </section>
 
           {metrics.isValid && <>
+            <GrowthModelChart data={growthModelData} />
             <Roadmap description={`毎週の記事目標 ${values.articlesPerWeek}本 ・ つぶやき目標 ${values.shortPostsPerWeek}件`} items={weeklyRoadmap} title="週次ロードマップ" />
             <Roadmap description={`毎月の記事目標 ${values.articlesPerWeek * 4}本 ・ つぶやき目標 ${values.shortPostsPerWeek * 4}件`} items={monthlyRoadmap} title="月次ロードマップ" />
           </>}
