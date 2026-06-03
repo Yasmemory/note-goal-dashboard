@@ -366,6 +366,88 @@ export function buildCorrelationAnalysis(logs: DailyLog[]) {
   };
 }
 
+export function buildVictoryRecommendations(logs: DailyLog[], values: FormValues) {
+  const correlation = buildCorrelationAnalysis(logs);
+
+  if (!correlation.hasEnoughData) {
+    return {
+      hasEnoughData: false,
+      items: [],
+      reason: "まだ十分な分析データがありません",
+    };
+  }
+
+  const rankedCards = correlation.cards
+    .filter((card) => card.sampleCount > 0)
+    .sort((a, b) => b.value - a.value);
+  const strongest = rankedCards[0]?.label ?? "";
+  const items = [
+    {
+      checked: false,
+      label: `コメント${Math.max(values.commentsPerDay, strongest.includes("コメント") ? values.commentsPerDay + 2 : values.commentsPerDay)}件`,
+    },
+    {
+      checked: false,
+      label: `記事${strongest.includes("記事") ? 1 : Math.max(1, Math.ceil(values.articlesPerWeek / 3))}本`,
+    },
+    {
+      checked: false,
+      label: `他人の記事${Math.max(values.readsPerDay, strongest.includes("読") ? values.readsPerDay + 2 : values.readsPerDay)}本`,
+    },
+  ];
+
+  if (strongest.includes("つぶやき")) {
+    items.splice(2, 0, { checked: false, label: "つぶやき1件" });
+  }
+
+  return {
+    hasEnoughData: true,
+    items: items.slice(0, 4),
+    reason: strongest ? `${strongest}が伸びに効いていそうです` : "実績データから今日の行動を提案します",
+  };
+}
+
+export function buildWeeklyReview(logs: DailyLog[], values: FormValues, requiredFollowersPerWeek: number) {
+  const current = parseDate(values.currentDate);
+  const day = current.getUTCDay();
+  const daysFromMonday = day === 0 ? 6 : day - 1;
+  const weekStart = addDays(values.currentDate, -daysFromMonday);
+  const weekLogs = sortedDailyLogs(logs).filter((log) => log.date >= weekStart && log.date <= values.currentDate);
+  const beforeWeek = sortedDailyLogs(logs).filter((log) => log.date < weekStart).at(-1);
+  const first = weekLogs[0];
+  const latest = weekLogs.at(-1);
+  const baselineFollowers = beforeWeek?.followers ?? first?.followers ?? values.currentFollowers;
+  const latestFollowers = latest?.followers ?? values.currentFollowers;
+  const weeklyIncrease = Math.max(latestFollowers - baselineFollowers, 0);
+  const weeklyTarget = Math.max(requiredFollowersPerWeek, 0);
+  const achievementRate = weeklyTarget > 0 ? (weeklyIncrease / weeklyTarget) * 100 : 0;
+  const targetGap = weeklyIncrease - weeklyTarget;
+  const correlation = buildCorrelationAnalysis(logs);
+  const mostEffectiveAction = correlation.bestLabel ?? "まだ判定できません";
+  const actionTotals = [
+    { label: "記事投稿", value: weekLogs.reduce((sum, log) => sum + log.articles, 0) },
+    { label: "つぶやき投稿", value: weekLogs.reduce((sum, log) => sum + log.shortPosts, 0) },
+    { label: "読む記事", value: weekLogs.reduce((sum, log) => sum + log.reads, 0) },
+    { label: "コメント活動", value: weekLogs.reduce((sum, log) => sum + log.comments, 0) },
+  ];
+  const leastAction = actionTotals.sort((a, b) => a.value - b.value)[0]?.label ?? "未判定";
+  const recommendation = correlation.bestLabel
+    ? `${correlation.bestLabel}を維持する`
+    : `${leastAction}を少し増やす`;
+
+  return {
+    achievementRate,
+    evaluation: targetGap >= 0 ? "目標達成" : "目標未達",
+    leastAction,
+    mostEffectiveAction,
+    recommendation,
+    targetGap,
+    weekStart,
+    weeklyIncrease,
+    weeklyTarget,
+  };
+}
+
 export function buildForecastAnalysis(logs: DailyLog[], values: FormValues, requiredFollowersPerDay: number) {
   const sorted = sortedDailyLogs(logs);
   const latestFollowers = values.currentFollowers;
@@ -404,6 +486,7 @@ export function AppHeader() {
     { href: "/", label: "Dashboard" },
     { href: "/analytics", label: "Analytics" },
     { href: "/roadmap", label: "Roadmap" },
+    { href: "/weekly-review", label: "Weekly" },
     { href: "/settings", label: "Settings" },
   ];
 

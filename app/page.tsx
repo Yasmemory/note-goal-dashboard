@@ -7,6 +7,7 @@ import {
   PageShell,
   RecentLogs,
   SectionCard,
+  buildVictoryRecommendations,
   decimal,
   formatDate,
   useDashboardData,
@@ -20,10 +21,34 @@ export default function DashboardPage() {
     values.readsPerDay + (isBehind ? Math.max(2, Math.ceil(Math.abs(metrics.progressDelta) / 10)) : 0);
   const adjustedComments =
     values.commentsPerDay + (isBehind ? Math.max(1, Math.ceil(Math.abs(metrics.progressDelta) / 20)) : 0);
+  const recommendations = buildVictoryRecommendations(data.logs, values);
 
   return (
     <PageShell>
       <ErrorMessages errors={metrics.errors} />
+      <SectionCard
+        description={recommendations.reason}
+        eyebrow="RECOMMEND"
+        title="おすすめ勝利条件"
+      >
+        {recommendations.hasEnoughData ? (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {recommendations.items.map((item) => (
+              <label
+                className="flex items-center gap-3 rounded-2xl border border-emerald-100 bg-emerald-50 p-4 text-sm font-black text-emerald-800"
+                key={item.label}
+              >
+                <input className="h-4 w-4 accent-emerald-600" type="checkbox" />
+                {item.label}
+              </label>
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-2xl bg-stone-50 px-4 py-5 text-center text-sm font-bold text-stone-500">
+            まだ十分な分析データがありません
+          </p>
+        )}
+      </SectionCard>
       <SectionCard
         description={isBehind ? "少し行動量を増やして、交流のきっかけを作りましょう。" : "順調です。記事の質と継続を大切にしましょう。"}
         eyebrow="TODAY"
