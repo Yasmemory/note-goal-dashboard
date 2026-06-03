@@ -269,6 +269,135 @@ export function buildActualProgressData(logs: DailyLog[], values: FormValues) {
   return sorted.map((log) => ({ date: formatDate(log.date), followers: log.followers }));
 }
 
+function clampProgress(value: number) {
+  return Math.min(Math.max(value, 0), 1);
+}
+
+export function plannedFollowersOnDate(values: FormValues, date: string) {
+  const totalDays = Math.max(diffDays(values.accountStartDate, values.targetDate), 1);
+  const elapsedDays = diffDays(values.accountStartDate, date);
+  const progress = clampProgress(elapsedDays / totalDays);
+  return Math.round(values.targetFollowers * progress);
+}
+
+export function sortedDailyLogs(logs: DailyLog[]) {
+  return [...logs].sort((a, b) => a.date.localeCompare(b.date));
+}
+
+export function buildPlannedVsActualData(logs: DailyLog[], values: FormValues) {
+  const sorted = sortedDailyLogs(logs);
+  const rows = sorted.map((log) => ({
+    actual: log.followers,
+    date: formatDate(log.date),
+    fullDate: log.date,
+    planned: plannedFollowersOnDate(values, log.date),
+  }));
+
+  if (!rows.some((row) => row.fullDate === values.currentDate)) {
+    rows.push({
+      actual: values.currentFollowers,
+      date: formatDate(values.currentDate),
+      fullDate: values.currentDate,
+      planned: plannedFollowersOnDate(values, values.currentDate),
+    });
+  }
+
+  return rows.sort((a, b) => a.fullDate.localeCompare(b.fullDate)).slice(-30);
+}
+
+export function buildTimeline(logs: DailyLog[]) {
+  const sorted = sortedDailyLogs(logs);
+  return sorted
+    .map((log, index) => ({
+      ...log,
+      delta: index === 0 ? 0 : log.followers - sorted[index - 1].followers,
+    }))
+    .reverse();
+}
+
+function average(numbers: number[]) {
+  if (numbers.length === 0) return 0;
+  return numbers.reduce((sum, value) => sum + value, 0) / numbers.length;
+}
+
+function averageDeltaFor(entries: ReturnType<typeof buildTimeline>, predicate: (entry: ReturnType<typeof buildTimeline>[number]) => boolean) {
+  return average(entries.filter(predicate).map((entry) => entry.delta));
+}
+
+export function buildCorrelationAnalysis(logs: DailyLog[]) {
+  const chronological = buildTimeline(logs).reverse();
+  const actionableEntries = chronological.filter((entry) => entry.delta !== 0 || chronological.length > 1).slice(1);
+  const hasEnoughData = chronological.length >= 4;
+  const averageComments = average(chronological.map((entry) => entry.comments));
+  const averageReads = average(chronological.map((entry) => entry.reads));
+
+  const cards = [
+    {
+      label: "記事投稿した日",
+      value: averageDeltaFor(actionableEntries, (entry) => entry.articles > 0),
+      sampleCount: actionableEntries.filter((entry) => entry.articles > 0).length,
+    },
+    {
+      label: "つぶやき投稿した日",
+      value: averageDeltaFor(actionableEntries, (entry) => entry.shortPosts > 0),
+      sampleCount: actionableEntries.filter((entry) => entry.shortPosts > 0).length,
+    },
+    {
+      label: "コメント数が多い日",
+      value: averageDeltaFor(actionableEntries, (entry) => entry.comments > averageComments),
+      sampleCount: actionableEntries.filter((entry) => entry.comments > averageComments).length,
+    },
+    {
+      label: "読んだ記事数が多い日",
+      value: averageDeltaFor(actionableEntries, (entry) => entry.reads > averageReads),
+      sampleCount: actionableEntries.filter((entry) => entry.reads > averageReads).length,
+    },
+  ];
+
+  const best = cards
+    .filter((card) => card.sampleCount > 0)
+    .sort((a, b) => b.value - a.value)
+    .at(0);
+
+  return {
+    bestLabel: best?.label ?? null,
+    cards,
+    hasEnoughData,
+  };
+}
+
+export function buildForecastAnalysis(logs: DailyLog[], values: FormValues, requiredFollowersPerDay: number) {
+  const sorted = sortedDailyLogs(logs);
+  const latestFollowers = values.currentFollowers;
+  const remainingFollowers = Math.max(values.targetFollowers - latestFollowers, 0);
+  const lastSevenStart = addDays(values.currentDate, -6);
+  const lastSeven = sorted.filter((log) => log.date >= lastSevenStart && log.date <= values.currentDate);
+  const lastSevenBaseline = sorted.filter((log) => log.date < lastSevenStart).at(-1) ?? lastSeven[0];
+  const lastSevenLatest = lastSeven.at(-1);
+  const lastSevenDays =
+    lastSevenBaseline && lastSevenLatest ? Math.max(diffDays(lastSevenBaseline.date, lastSevenLatest.date), 1) : 0;
+  const lastSevenAverage =
+    lastSevenBaseline && lastSevenLatest ? Math.max(lastSevenLatest.followers - lastSevenBaseline.followers, 0) / lastSevenDays : 0;
+
+  const first = sorted[0];
+  const latest = sorted.at(-1);
+  const allDays = first && latest ? Math.max(diffDays(first.date, latest.date), 1) : 0;
+  const allAverage = first && latest ? Math.max(latest.followers - first.followers, 0) / allDays : 0;
+  const actualAverage = lastSevenAverage > 0 ? lastSevenAverage : allAverage;
+  const predictedDate =
+    actualAverage > 0 ? addDays(values.currentDate, Math.ceil(remainingFollowers / actualAverage)) : null;
+  const canReachByTarget = predictedDate ? diffDays(predictedDate, values.targetDate) >= 0 : false;
+
+  return {
+    actualAverage,
+    allAverage,
+    canReachByTarget,
+    lastSevenAverage,
+    paceDelta: actualAverage - requiredFollowersPerDay,
+    predictedDate,
+  };
+}
+
 export function AppHeader() {
   const pathname = usePathname();
   const navItems = [
@@ -562,6 +691,159 @@ export function ActualProgressChart({ logs, values }: { logs: DailyLog[]; values
           <Line dataKey="followers" dot={{ r: 3 }} name="フォロワー" stroke="#059669" strokeWidth={3} type="monotone" />
         </LineChart>
       </div>
+    </SectionCard>
+  );
+}
+
+export function PlannedVsActualChart({
+  logs,
+  progressDelta,
+  values,
+}: {
+  logs: DailyLog[];
+  progressDelta: number;
+  values: FormValues;
+}) {
+  const data = buildPlannedVsActualData(logs, values);
+  const isBehind = progressDelta < 0;
+
+  return (
+    <SectionCard
+      description="日次ログの実績値と、開始日から目標日までの予定値を同じグラフで比較します。"
+      eyebrow="PLAN VS ACTUAL"
+      title="予定 vs 実績グラフ"
+    >
+      <div className={`mb-4 rounded-2xl px-4 py-3 text-sm font-black ${isBehind ? "bg-rose-50 text-rose-700" : "bg-emerald-50 text-emerald-700"}`}>
+        予定より{Math.abs(progressDelta)}人{isBehind ? "遅れ" : "先行"}
+      </div>
+      <div className="overflow-x-auto">
+        <LineChart data={data} height={320} margin={{ bottom: 8, left: -8, right: 24, top: 8 }} width={760}>
+          <CartesianGrid stroke="#e7e5e4" strokeDasharray="4 4" />
+          <XAxis dataKey="date" stroke="#78716c" tick={{ fontSize: 12 }} tickLine={false} />
+          <YAxis stroke="#78716c" tick={{ fontSize: 12 }} tickLine={false} width={58} />
+          <Tooltip
+            formatter={(value, name, item) => {
+              const dataKey = "dataKey" in item ? item.dataKey : name;
+              return [`${value}人`, dataKey === "planned" ? "予定値" : "実績値"];
+            }}
+          />
+          <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
+          <Line dataKey="planned" dot={{ r: 3 }} name="予定値" stroke="#94a3b8" strokeDasharray="6 4" strokeWidth={3} type="monotone" />
+          <Line dataKey="actual" dot={{ r: 3 }} name="実績値" stroke="#059669" strokeWidth={3} type="monotone" />
+        </LineChart>
+      </div>
+    </SectionCard>
+  );
+}
+
+export function HistoryTimeline({ logs }: { logs: DailyLog[] }) {
+  const timeline = buildTimeline(logs);
+
+  return (
+    <SectionCard
+      description="最新だけでなく、保存済みの日次ログを時系列で振り返れます。"
+      eyebrow="TIMELINE"
+      title="履歴タイムライン"
+    >
+      <div className="space-y-3">
+        {timeline.map((log) => (
+          <details className="rounded-2xl border border-stone-200 bg-stone-50 p-4" key={log.id} open={timeline.length <= 4}>
+            <summary className="cursor-pointer list-none">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="font-black text-stone-800">{formatDate(log.date)}</p>
+                  <p className="text-xs text-stone-500">フォロワー {log.followers}人</p>
+                </div>
+                <span className={`w-fit rounded-full px-3 py-1 text-xs font-black ${log.delta >= 0 ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"}`}>
+                  前回比 {log.delta >= 0 ? "+" : ""}
+                  {log.delta}人
+                </span>
+              </div>
+            </summary>
+            <div className="mt-4 grid gap-2 text-sm text-stone-600 sm:grid-cols-2 lg:grid-cols-4">
+              <p>記事: <span className="font-black">{log.articles}本</span></p>
+              <p>つぶやき: <span className="font-black">{log.shortPosts}件</span></p>
+              <p>読んだ記事: <span className="font-black">{log.reads}本</span></p>
+              <p>コメント: <span className="font-black">{log.comments}件</span></p>
+            </div>
+            {log.memo && <p className="mt-3 rounded-xl bg-white p-3 text-sm text-stone-600">{log.memo}</p>}
+          </details>
+        ))}
+        {timeline.length === 0 && (
+          <p className="rounded-2xl bg-stone-50 px-4 py-5 text-center text-sm text-stone-400">
+            まだ実績ログはありません。
+          </p>
+        )}
+      </div>
+    </SectionCard>
+  );
+}
+
+export function CorrelationAnalysis({ logs }: { logs: DailyLog[] }) {
+  const correlation = buildCorrelationAnalysis(logs);
+
+  if (!correlation.hasEnoughData) {
+    return (
+      <SectionCard eyebrow="CORRELATION" title="行動と成果の相関分析">
+        <p className="rounded-2xl bg-stone-50 px-4 py-5 text-center text-sm font-bold text-stone-500">
+          まだ分析にはデータが足りません。4件以上の実績ログがあると傾向を見やすくなります。
+        </p>
+      </SectionCard>
+    );
+  }
+
+  return (
+    <SectionCard
+      description={correlation.bestLabel ? `${correlation.bestLabel}が伸びに効いていそうです。` : "平均との差を見ながら、効いている行動を探します。"}
+      eyebrow="CORRELATION"
+      title="行動と成果の相関分析"
+    >
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        {correlation.cards.map((card) => (
+          <article className="rounded-2xl border border-stone-200 bg-stone-50 p-4" key={card.label}>
+            <p className="text-xs font-bold text-stone-500">{card.label}</p>
+            <p className="mt-2 text-3xl font-black text-stone-800">
+              {card.sampleCount > 0 ? `${decimal(card.value)}` : "-"}
+              <span className="ml-1 text-xs text-stone-400">人 / 日</span>
+            </p>
+            <p className="mt-1 text-xs text-stone-400">対象ログ {card.sampleCount}件</p>
+          </article>
+        ))}
+      </div>
+    </SectionCard>
+  );
+}
+
+export function ActualForecastPanel({
+  logs,
+  requiredFollowersPerDay,
+  values,
+}: {
+  logs: DailyLog[];
+  requiredFollowersPerDay: number;
+  values: FormValues;
+}) {
+  const forecast = buildForecastAnalysis(logs, values, requiredFollowersPerDay);
+
+  return (
+    <SectionCard
+      description="直近7日と全期間の実績ペースから、目標日までに届きそうかを判定します。"
+      eyebrow="FORECAST"
+      title="実績ベースの達成予測"
+    >
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <MetricCard label="直近7日平均" value={decimal(forecast.lastSevenAverage)} unit="人 / 日" />
+        <MetricCard label="全期間平均" value={decimal(forecast.allAverage)} unit="人 / 日" />
+        <MetricCard label="実績ペースの予測日" value={forecast.predictedDate ? formatDate(forecast.predictedDate) : "未算出"} unit="" accent />
+        <MetricCard label="必要ペースとの差" value={`${forecast.paceDelta >= 0 ? "+" : ""}${decimal(forecast.paceDelta)}`} unit="人 / 日" />
+      </div>
+      <p className={`mt-4 rounded-2xl px-4 py-3 text-sm font-black ${forecast.canReachByTarget ? "bg-emerald-50 text-emerald-700" : "bg-rose-50 text-rose-700"}`}>
+        {forecast.predictedDate
+          ? forecast.canReachByTarget
+            ? "今の実績ペースなら目標日までに達成できそうです。"
+            : "今の実績ペースでは目標日までに届かない可能性があります。"
+          : "実績ログが増えると達成予測を計算できます。"}
+      </p>
     </SectionCard>
   );
 }
